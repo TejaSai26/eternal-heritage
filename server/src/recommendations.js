@@ -1,3 +1,4 @@
+
 const INTEREST_LABELS = {
   cooking: 'food and cooking',
   anime: 'anime and visual storytelling',
@@ -16,43 +17,106 @@ const INTEREST_LABELS = {
   visual_storytelling: 'visual storytelling',
 }
 
-export function rankStories({ stories, sites, profile, visitedSiteIds = [] }) {
+export function rankStories({
+  stories,
+  sites,
+  profile,
+  visitedSiteIds = [],
+}) {
   const siteById = new Map(sites.map((site) => [site.id, site]))
-  const selectedInterests = Array.isArray(profile?.interests) ? profile.interests : []
+
+  const selectedInterests = new Set(
+    Array.isArray(profile?.interests) ? profile.interests : [],
+  )
+
+  const visitedSites = new Set(visitedSiteIds)
   const recentSiteId = profile?.recently_visited_site_id || ''
   const state = profile?.state || ''
 
   const ranked = stories.map((story) => {
     const site = siteById.get(story.site_id) || null
-    const tags = Array.isArray(story.interest_tags) ? story.interest_tags : []
-    const interestMatches = tags.filter((tag) => selectedInterests.includes(tag))
-    const targetStates = Array.isArray(story.target_states) ? story.target_states : []
-    const stateMatches = Boolean(state && (targetStates.includes(state) || site?.state === state))
-    const visitMatches = Boolean(recentSiteId && (story.related_to_site_id === recentSiteId || story.site_id === recentSiteId))
-    const previouslyVisited = visitedSiteIds.includes(story.site_id)
-    let score = interestMatches.length * 4
-    if (stateMatches) score += 8
-    if (visitMatches) score += 5
-    if (selectedInterests.includes('cooking') && story.site_id === 'tirumala' && tags.includes('food')) score += 5
-    if (selectedInterests.includes('anime') && tags.includes('anime')) score += 3
-    if (previouslyVisited && story.site_id !== recentSiteId) score -= 2
 
+    const tags = [
+      ...new Set(
+        Array.isArray(story.interest_tags)
+          ? story.interest_tags
+          : [],
+      ),
+    ]
+
+    const matchingInterests = tags.filter((tag) =>
+      selectedInterests.has(tag),
+    )
+
+    const targetStates = Array.isArray(story.target_states)
+      ? story.target_states
+      : []
+
+    const stateMatches = Boolean(
+      state &&
+      (targetStates.includes(state) || site?.state === state),
+    )
+
+    const visitMatches = Boolean(
+      recentSiteId &&
+      (
+        story.related_to_site_id === recentSiteId ||
+        story.site_id === recentSiteId
+      ),
+    )
+
+    const previouslyVisited = visitedSites.has(story.site_id)
+
+    // Explainable scoring: each factor has one clear purpose.
+    const interestScore = matchingInterests.length * 5
+    const regionalScore = stateMatches ? 3 : 0
+    const visitScore = visitMatches ? 4 : 0
+    const repeatPenalty = previouslyVisited ? -5 : 0
+
+    const score =
+      interestScore +
+      regionalScore +
+      visitScore +
+      repeatPenalty
+
+    // Build the explanation from the same factors used in scoring.
     const reasons = []
+
+    if (matchingInterests.length > 0) {
+      const labels = matchingInterests.map(
+        (tag) => INTEREST_LABELS[tag] || tag.replaceAll('_', ' '),
+      )
+
+      reasons.push(`Matches your interest in ${labels.join(' and ')}`)
+    }
+
+    if (stateMatches) {
+      reasons.push(
+        site?.state === state
+          ? `A heritage discovery in ${state}`
+          : `Connects with your interest in heritage from ${state}`,
+      )
+    }
+
     if (visitMatches) {
       const recentSite = siteById.get(recentSiteId)
-      reasons.push(`Builds on your recent ${recentSite?.short_title || recentSite?.title || 'heritage-site'} visit`)
+      const recentTitle =
+        recentSite?.short_title ||
+        recentSite?.title ||
+        'a heritage site you recently visited'
+
+      reasons.push(`Builds on your recent ${recentTitle} visit`)
     }
-    if (stateMatches && site?.state === state && story.site_id !== recentSiteId) {
-      reasons.push(`A heritage discovery in ${state}`)
+
+   if (selectedInterests.has('anime') && tags.includes('anime')) {
+  reasons.push(
+    'This connection is about visual motifs and storytelling, not a claim that the historic site is connected to anime',
+  )
+}
+    if (reasons.length === 0) {
+      reasons.push('A curated discovery from the heritage collection')
     }
-    if (interestMatches.length) {
-      const interestLabel = INTEREST_LABELS[interestMatches[0]] || interestMatches[0].replaceAll('_', ' ')
-      reasons.push(`matches your interest in ${interestLabel}`)
-    }
-    if (!reasons.length) reasons.push('a curated starting point from the collection')
-    if (selectedInterests.includes('anime') && tags.includes('anime')) {
-      reasons.push('through visual motifs and storytelling—not a claim that the historic site is connected to anime')
-    }
+
     return {
       ...story,
       site,
@@ -62,5 +126,11 @@ export function rankStories({ stories, sites, profile, visitedSiteIds = [] }) {
     }
   })
 
-  return ranked.sort((a, b) => b.score - a.score || String(a.title).localeCompare(String(b.title))).slice(0, 6)
+  return ranked
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        String(a.title).localeCompare(String(b.title)),
+    )
+    .slice(0, 6)
 }
